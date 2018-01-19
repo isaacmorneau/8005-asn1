@@ -25,7 +25,8 @@ static inline void print_help() {
 static int mode = 0;
 static int branches = 4;
 static int splits = 0;
-sem_t * sem = 0;
+sem_t * sem_run = 0;
+sem_t * sem_ready = 0;
 
 void task() {
     volatile int a = 0xDEAD;
@@ -52,12 +53,12 @@ struct timespec openmp() {
 
 
 //threads testing
-void *run_task(void * sem_addr) {
-    sem_t * sem = (sem_t *) sem_addr;
-    sem_wait(sem);
+void *run_task(void * ) {
+    sem_post(sem_ready);
+    sem_wait(sem_run);
     for (int i = 0; i < branches/splits; ++i)
         task();
-    sem_post(sem);
+    sem_post(sem_run);
     return 0;
 }
 
@@ -70,18 +71,22 @@ struct timespec threads() {
 
     for(int i = 0; i < splits; ++i) {
         pthread_t th_id;
-        pthread_create(&th_id, &attr, run_task, (void *)sem);
+        pthread_create(&th_id, &attr, run_task, 0);
     }
 
-    sleep(1);//this sleep is to ensure that all threads are created and waiting
-
-    clock_gettime(CLOCK_REALTIME, &start);
-    //start all the threads
+    //wait for all threads to signal ready
     for(int i = 0; i < splits; ++i)
-        sem_post(sem);
+        sem_wait(sem_ready);
+
+    //start the clock and all the threads
+    clock_gettime(CLOCK_REALTIME, &start);
+    for(int i = 0; i < splits; ++i)
+        sem_post(sem_run);
+
     //wait for all the threads to signal finishing
     for(int i = 0; i < splits; ++i)
-        sem_wait(sem);
+        sem_wait(sem_run);
+    //stop the clock
     clock_gettime(CLOCK_REALTIME, &end);
 
     pthread_attr_destroy(&attr);
@@ -141,9 +146,14 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    sem = sem_open("sync_lock", O_CREAT, 0644, 0);
-    if (sem == SEM_FAILED)  {
+    sem_run = sem_open("sync_run", O_CREAT, 0644, 0);
+    sem_ready = sem_open("sync_ready", O_CREAT, 0644, 0);
+    if (sem_run == SEM_FAILED)  {
         perror("sem_open");
+        return 2;
+    }
+    if (sem_ready == SEM_FAILED)  {
+        perror("sem_open2");
         return 2;
     }
 
@@ -158,9 +168,10 @@ int main(int argc, char ** argv) {
             case PROC_MODE:
                 break;
         }
-        printf("%d.%d seconds\n", (int)elapsed.tv_sec, (int)elapsed.tv_nsec);
+        printf("%lf seconds\n", elapsed.tv_sec + (elapsed.tv_nsec * 0.0000000001));
     }
 
-    sem_close(sem);
+    sem_close(sem_ready);
+    sem_close(sem_run);
     return 0;
 }
