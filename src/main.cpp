@@ -5,8 +5,9 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <semaphore.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 
 #define OMP_MODE 1
 #define THREAD_MODE 2
@@ -25,19 +26,9 @@ static inline void print_help() {
 static int mode = 0;
 static int branches = 4;
 static int splits = 0;
-sem_t * sem_run = 0;
-sem_t * sem_ready = 0;
 
 void task() {
-    volatile int a = 0xDEAD;
-    volatile int b = 0XBEEF;
-    volatile int c = 0XC0FFE;
-    for(int i = 0; i < 1000; ++i){
-        c = b * i;
-        for(int j = 0; j < 1000; ++j){
-            b = a * j;
-        }
-    }
+    sleep(1);
 }
 
 //openmp testing
@@ -51,46 +42,65 @@ struct timespec openmp() {
     return {end.tv_sec - start.tv_sec, end.tv_nsec - start.tv_nsec};
 }
 
-
 //threads testing
-void *run_task(void * ) {
-    sem_post(sem_ready);
-    sem_wait(sem_run);
+void run_task_proc() {
     for (int i = 0; i < branches/splits; ++i)
         task();
-    sem_post(sem_run);
+    exit(0);
+}
+
+//threads testing
+void *run_task_thread(void * ) {
+    for (int i = 0; i < branches/splits; ++i)
+        task();
     return 0;
 }
 
-struct timespec threads() {
+struct timespec process() {
     struct timespec start, end;
-    pthread_attr_t attr;
-
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-    for(int i = 0; i < splits; ++i) {
-        pthread_t th_id;
-        pthread_create(&th_id, &attr, run_task, 0);
-    }
-
-    //wait for all threads to signal ready
-    for(int i = 0; i < splits; ++i)
-        sem_wait(sem_ready);
-
-    //start the clock and all the threads
+    //start the clock
     clock_gettime(CLOCK_REALTIME, &start);
-    for(int i = 0; i < splits; ++i)
-        sem_post(sem_run);
-
-    //wait for all the threads to signal finishing
-    for(int i = 0; i < splits; ++i)
-        sem_wait(sem_run);
+    for (int i = 0; i < splits; ++i) {
+        switch(fork()) {
+            case 0:
+                //child
+                run_task_proc();
+                return {-1,-1};
+            case -1:
+                //error
+                perror("fork");
+                return {-1,-1};
+            default:
+                //parent
+                break;
+        }
+    }
+    //spinlock waiting for children to die
+    while (wait(0) != -1);
     //stop the clock
     clock_gettime(CLOCK_REALTIME, &end);
+    return {end.tv_sec - start.tv_sec, end.tv_nsec - start.tv_nsec};
+}
 
+
+struct timespec threads() {
+    struct timespec start, end;
+    pthread_t * th_id = (pthread_t *)malloc(sizeof(pthread_t)*splits);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+
+    //start the clock
+    clock_gettime(CLOCK_REALTIME, &start);
+    for(int i = 0; i < splits; ++i) {
+        pthread_create(th_id + splits, &attr, run_task_thread, 0);
+    }
+    for(int i = 0; i < splits; ++i) {
+        void * ret;
+        pthread_join(th_id[splits], &ret);
+    }
+    //stop the clock
+    clock_gettime(CLOCK_REALTIME, &end);
     pthread_attr_destroy(&attr);
-
     return {end.tv_sec - start.tv_sec, end.tv_nsec - start.tv_nsec};
 }
 
@@ -146,17 +156,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    sem_run = sem_open("sync_run", O_CREAT, 0644, 0);
-    sem_ready = sem_open("sync_ready", O_CREAT, 0644, 0);
-    if (sem_run == SEM_FAILED)  {
-        perror("sem_open");
-        return 2;
-    }
-    if (sem_ready == SEM_FAILED)  {
-        perror("sem_open2");
-        return 2;
-    }
-
     while (itterations--) {
         switch (mode) {
             case OMP_MODE:
@@ -166,12 +165,12 @@ int main(int argc, char ** argv) {
                 elapsed = threads();
                 break;
             case PROC_MODE:
+                elapsed = process();
+                if (elapsed.tv_sec == -1 && elapsed.tv_nsec == -1)
+                    return 0;
                 break;
         }
         printf("%lf seconds\n", elapsed.tv_sec + (elapsed.tv_nsec * 0.0000000001));
     }
-
-    sem_close(sem_ready);
-    sem_close(sem_run);
     return 0;
 }
