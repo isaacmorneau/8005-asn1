@@ -22,19 +22,21 @@ add_definitions(-D_POSIX_C_SOURCE=200809L)
 add_definitions(-D_DEFAULT_SOURCE)
 
 include_directories(src)
+file(GLOB MAIN "src/*.cpp")
 
-file(GLOB MAIN
-    "src/*.cpp"
-    )
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}")
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
 
+find_package(Threads REQUIRED)
+find_package(GMP REQUIRED)
 find_package(OpenSSL REQUIRED)
+
+include_directories(${GMP_INCLUDE_DIR})
 
 add_executable(8005-asn1 ${MAIN})
 
 find_package(OpenMP REQUIRED)
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-target_link_libraries(8005-asn1 rt Threads::Threads dl)
+target_link_libraries(8005-asn1 rt Threads::Threads dl ${GMPXX_LIBRARY} ${GMP_LIBRARY})
